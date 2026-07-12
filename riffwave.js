@@ -64,9 +64,7 @@ var RIFFWAVE = function(data) {
   this.data = [];        // Array containing audio samples
   this.wav = [];         // Array containing the generated wave file
   this.dataURI = '';     // http://en.wikipedia.org/wiki/Data_URI_scheme
-  this.vgmdata0 = '';     // will become a data uri
-  this.vgmdata1 = '';     // will become a data uri
-  this.vgmdata2 = '';     // will become a data uri
+  this.afxdata = '';     // will become a data uri
 
   this.header = {                         // OFFS SIZE NOTES
     chunkId      : [0x52,0x49,0x46,0x46], // 0    4    "RIFF" = 0x52494646
@@ -103,14 +101,8 @@ var RIFFWAVE = function(data) {
     return r;
   }
 
-  this.loadvgm0 = function(data) {
-    this.vgmdata0 = 'data:application/octet-stream;base64,'+FastBase64.Encode(data);
-  }
-  this.loadvgm1 = function(data) {
-    this.vgmdata1 = 'data:application/octet-stream;base64,'+FastBase64.Encode(data);
-  }
-  this.loadvgm2 = function(data) {
-    this.vgmdata2 = 'data:application/octet-stream;base64,'+FastBase64.Encode(data);
+  this.loadafx = function(data) {
+    this.afxdata = 'data:application/octet-stream;base64,'+FastBase64.Encode(data);
   }
 
   this.Make = function(data) {

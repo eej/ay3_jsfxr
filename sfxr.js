@@ -1,4 +1,4 @@
-// getRawBuffer builds the VGM data
+// getRawBuffer builds the AY-3-8910 data (ayfx .afx effect)
 
 // Wave shapes
 var SQUARE = 0;
@@ -10,6 +10,54 @@ var NOISE = 3;
 var masterVolume = 1;
 
 var OVERSAMPLING = 8;
+
+// AY-3-8910 (MSX) constants.
+// Tone frequency = AY_CLOCK / (16 * period), so an internal synth period
+// (measured in 44100*8 Hz oversampled steps) converts to an AY tone period
+// by multiplying with AY_CLOCK / (16 * 44100 * OVERSAMPLING).
+var AY_CLOCK = 1789772.5;
+var AY_PERIOD_FACTOR = AY_CLOCK / (16 * 44100 * OVERSAMPLING); // ~0.31707
+var AY_MAX_TONE = 4095;   // 12-bit tone period
+var AY_MAX_NOISE = 31;    // 5-bit noise period
+// Internal period that maps to the AY's maximum tone period (0xfff)
+var AY_MAX_INTERNAL_PERIOD = Math.floor(AY_MAX_TONE / AY_PERIOD_FACTOR); // 12915
+// The noise generator's floor is much higher: noise period 31 shifts at
+// AY_CLOCK/(16*31) ~ 3.6 kHz. Clamping the synth here too keeps the browser
+// preview from going deeper than the chip can.
+var AY_MAX_INTERNAL_PERIOD_NOISE =
+  Math.floor(AY_MAX_NOISE * 32 / AY_PERIOD_FACTOR); // 3128
+
+// DAC amplitude of each AY volume level, normalized to 1.0 (measured values
+// via ayfxedit's wav renderer, (C)HackerKAY). The steps are logarithmic, so
+// an envelope amplitude is converted to a volume level by picking the level
+// with the nearest amplitude rather than by scaling linearly.
+var AY_VOL_AMP = [
+  0.0,     0.01276, 0.01850, 0.02705, 0.03996, 0.05912, 0.08235, 0.13462,
+  0.15856, 0.25489, 0.35610, 0.44693, 0.56407, 0.70826, 0.84220, 1.0
+];
+
+// Noise on the AY plays at the same DAC amplitude as a tone at the same
+// volume level, but the preview renders noise quieter than its nominal
+// level (anti-alias averaging plus the preset filters, which the chip
+// doesn't have), and broadband noise sounds louder than a tone at equal
+// level anyway. Trim noise volume the way sn_jsfxr did (env*10 vs env*15)
+// so the chip balance matches the preview.
+var AY_NOISE_TRIM = 10 / 15;
+
+function _ayVolume(v) {
+  if (v <= 0) return 0;
+  if (v >= 1) return 15;
+  var best = 0;
+  var bestDist = 2;
+  for (var i = 0; i < 16; ++i) {
+    var dist = Math.abs(AY_VOL_AMP[i] - v);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = i;
+    }
+  }
+  return best;
+}
 
 /*** Core data structure ***/
 
@@ -63,6 +111,10 @@ function Params() {
   this.sound_vol = 0.5;
   this.sample_rate = 44100;
   this.sample_size = 8;
+
+  // AY player frame rate: 50 (European MSX, ZX Spectrum, ayfxedit) or
+  // 60 (Japanese/US MSX)
+  this.frame_rate = 50;
 }
 
 /*** Helper functions ***/
@@ -239,12 +291,13 @@ Params.prototype.laserShoot = function () {
   this.p_env_decay = frnd(0.4);
   if (rnd(1))
     this.p_env_punch = frnd(0.3);
-  if (rnd(2) === 0) {
-    this.p_pha_offset = frnd(0.2);
-    this.p_pha_ramp = -frnd(0.2);
-  }
-  //if (rnd(1))
-    this.p_hpf_freq = frnd(0.3);
+// flanger and filters affect only the preview, not the AY output
+//  if (rnd(2) === 0) {
+//    this.p_pha_offset = frnd(0.2);
+//    this.p_pha_ramp = -frnd(0.2);
+//  }
+//  if (rnd(1))
+//    this.p_hpf_freq = frnd(0.3);
 
   if (this.wave_type === SAWTOOTH)
     this.wave_type = SQUARE;
@@ -270,10 +323,11 @@ Params.prototype.explosion = function () {
   this.p_env_attack = 0;
   this.p_env_sustain = 0.1 + frnd(0.3);
   this.p_env_decay = frnd(0.5);
-  if (rnd(1)) {
-    this.p_pha_offset = -0.3 + frnd(0.9);
-    this.p_pha_ramp = -frnd(0.3);
-  }
+// flanger affects only the preview, not the AY output
+//  if (rnd(1)) {
+//    this.p_pha_offset = -0.3 + frnd(0.9);
+//    this.p_pha_ramp = -frnd(0.3);
+//  }
   this.p_env_punch = 0.2 + frnd(0.6);
   if (rnd(1)) {
     this.p_vib_strength = frnd(0.7);
@@ -363,7 +417,7 @@ Params.prototype.blipSelect = function () {
   this.p_env_attack = 0;
   this.p_env_sustain = 0.1 + frnd(0.1);
   this.p_env_decay = frnd(0.2);
-  this.p_hpf_freq = 0.1;
+//  this.p_hpf_freq = 0.1;  // filter affects only the preview, not the AY output
   return this;
 }
 
@@ -450,8 +504,9 @@ Params.prototype.random = function () {
   this.p_hpf_freq = Math.pow(frnd(1), 5);
   this.p_hpf_ramp = Math.pow(frnd(2) - 1, 5);
 */
-  this.p_pha_offset = Math.pow(frnd(2) - 1, 3);
-  this.p_pha_ramp = Math.pow(frnd(2) - 1, 3);
+// flanger affects only the preview, not the AY output
+//  this.p_pha_offset = Math.pow(frnd(2) - 1, 3);
+//  this.p_pha_ramp = Math.pow(frnd(2) - 1, 3);
   this.p_repeat_speed = frnd(2) - 1;
   this.p_arp_speed = frnd(2) - 1;
   this.p_arp_mod = frnd(2) - 1;
@@ -484,8 +539,8 @@ Params.prototype.mutate = function () {
   if (rnd(1)) this.p_hpf_freq += frnd(0.1) - 0.05;
   if (rnd(1)) this.p_hpf_ramp += frnd(0.1) - 0.05;
 */
-  if (rnd(1)) this.p_pha_offset += frnd(0.1) - 0.05;
-  if (rnd(1)) this.p_pha_ramp += frnd(0.1) - 0.05;
+//  if (rnd(1)) this.p_pha_offset += frnd(0.1) - 0.05;
+//  if (rnd(1)) this.p_pha_ramp += frnd(0.1) - 0.05;
   if (rnd(1)) this.p_repeat_speed += frnd(0.1) - 0.05;
   if (rnd(1)) this.p_arp_speed += frnd(0.1) - 0.05;
   if (rnd(1)) this.p_arp_mod += frnd(0.1) - 0.05;
@@ -598,6 +653,7 @@ SoundEffect.prototype.init = function (ps) {
 
   this.sampleRate = ps.sample_rate;
   this.bitsPerChannel = ps.sample_size;
+  this.frameRate = (parseInt(ps.frame_rate) === 60) ? 60 : 50;
 }
 
 SoundEffect.prototype.initForRepeat = function() {
@@ -645,32 +701,19 @@ SoundEffect.prototype.getRawBuffer = function () {
   var num_clipped = 0;
 
   var buffer = [];
-  var vgm0 = [
-    0x56,0x67,0x6D,0x20,0x0B,0x1F,0x00,0x00,0x10,0x01,0x00,0x00,0x94,0x9E,0x36,0x00,
-    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x91,0xD4,0x12,0x00,0x00,0x00,0x00,0x00,
-    0x00,0x00,0x00,0x00,0x3C,0x00,0x00,0x00,0x03,0x00,0x0f,0x00,0x00,0x00,0x00,0x00,
-    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
-  ];
-  var vgm1 = [...vgm0];
-  var vgm2 = [...vgm0];
-  var vgm_samples = 0;
+
+  // AY chip state captured once per player frame: {tone, noise, vol}
+  // tone is -1 for noise effects, noise is -1 for tone effects
+  var ayFrames = [];
+  // t counts 44100 Hz samples, so one player frame is 44100/frameRate of them
+  var samplesPerFrame = (this.frameRate === 50) ? 882 : 735;
+  // noise bottoms out at a higher pitch than tone does on the AY
+  var maxInternalPeriod = (this.waveShape === NOISE) ?
+    AY_MAX_INTERNAL_PERIOD_NOISE : AY_MAX_INTERNAL_PERIOD;
 
   var sample_sum = 0;
   var num_summed = 0;
   var summands = Math.floor(44100 / this.sampleRate);
-
-  // every 735 samples is 1/60th second
-  var outcnt = 0;
-
-  // set the noise type, if it's noise
-  if (this.waveShape === NOISE) {
-    vgm0.push(0x50);
-    vgm0.push(0xe7);  // noise type - white noise on channel 3
-    vgm1.push(0x50);
-    vgm1.push(0xe7);  // noise type - white noise on channel 3
-    vgm2.push(0x50);
-    vgm2.push(0xe7);  // noise type - white noise on channel 3
-  }
 
   for(var t = 0; ; ++t) {
 
@@ -692,9 +735,10 @@ SoundEffect.prototype.getRawBuffer = function () {
       if (this.enableFrequencyCutoff)
         break;
     }
-    // SN check
-    if (this.period > 3222) {
-      this.period = 3222;  // determined by observation that gets 0x3ff
+    // AY check: clamp so the period stays within what the chip can play
+    // (12-bit tone period, or the 5-bit noise period for noise effects)
+    if (this.period > maxInternalPeriod) {
+      this.period = maxInternalPeriod;
     }
 
     // Vibrato
@@ -738,6 +782,26 @@ SoundEffect.prototype.getRawBuffer = function () {
         this.flthp = 0.00001;
       if (this.flthp > 0.1)
         this.flthp = 0.1;
+    }
+
+    // Capture the AY chip state once per player frame
+    if (t % samplesPerFrame === 0) {
+      var tp = Math.round(iperiod * AY_PERIOD_FACTOR);
+      if (tp < 1) tp = 1;
+      if (tp > AY_MAX_TONE) tp = AY_MAX_TONE;
+      var ayvol = _ayVolume(this.waveShape === NOISE ?
+                            env_vol * AY_NOISE_TRIM : env_vol);
+      if (this.waveShape === NOISE) {
+        // The synth's noise sample rate is 32 steps per tone period, and the
+        // AY noise generator shifts at AY_CLOCK/(16*noise_period), so the
+        // equivalent noise period is the tone period divided by 32.
+        var np = Math.round(tp / 32);
+        if (np < 1) np = 1;
+        if (np > AY_MAX_NOISE) np = AY_MAX_NOISE;
+        ayFrames.push({tone: -1, noise: np, vol: ayvol});
+      } else {
+        ayFrames.push({tone: tp, noise: -1, vol: ayvol});
+      }
     }
 
     // 8x oversampling
@@ -839,113 +903,63 @@ SoundEffect.prototype.getRawBuffer = function () {
       buffer.push(sample & 0xFF);
       buffer.push((sample >> 8) & 0xFF);
     }
-
-    // now check out the basic
-    ++outcnt;
-    if (outcnt >= 735) {
-      outcnt = 0;
-      // output the current volume and frequency
-      var code = Math.round(iperiod/3.15);  // determined by observation
-      if (this.waveShape === SQUARE) {
-        // just channel 0
-        vgm0.push(0x50);
-        vgm0.push((code&0xf)+0x80);
-        vgm0.push(0x50);
-        vgm0.push((code>>4)&0xff);
-        vgm0.push(0x50);
-        vgm0.push(15-Math.floor(env_vol*15)+0x90);
-
-        vgm1.push(0x50);
-        vgm1.push((code&0xf)+0xA0);
-        vgm1.push(0x50);
-        vgm1.push((code>>4)&0xff);
-        vgm1.push(0x50);
-        vgm1.push(15-Math.floor(env_vol*15)+0xB0);
-
-        vgm2.push(0x50);
-        vgm2.push((code&0xf)+0xC0);
-        vgm2.push(0x50);
-        vgm2.push((code>>4)&0xff);
-        vgm2.push(0x50);
-        vgm2.push(15-Math.floor(env_vol*15)+0xD0);
-      } else {
-        // channel 2 and noise
-        code /= 15;  // noise shift rate (defined in VGM header)
-        vgm0.push(0x50);
-        vgm0.push((code&0xf)+0xc0);
-        vgm0.push(0x50);
-        vgm0.push((code>>4)&0xff);
-        vgm0.push(0x50);
-        vgm0.push(0xdf);  // mute tone
-        vgm0.push(0x50);
-        vgm0.push(15-Math.floor(env_vol*10)+0xf0);
-
-	vgm1=[...vgm0];
-	vgm2=[...vgm0];
-      }
-      vgm0.push(0x62);  // 1 frame delay
-      vgm1.push(0x62);  // 1 frame delay
-      vgm2.push(0x62);  // 1 frame delay
-      vgm_samples += 735;
-    }
   }
-
-  // all done, mute the channels
-  if (this.waveShape === SQUARE) {
-    vgm0.push(0x50);
-    vgm0.push(0x9f);
-    vgm1.push(0x50);
-    vgm1.push(0xbf);
-    vgm2.push(0x50);
-    vgm2.push(0xdf);
-  } else {
-    vgm0.push(0x50);
-    vgm0.push(0xff);
-    vgm1=[...vgm0];
-    vgm2=[...vgm0];
-  }
-  // and end the data
-  vgm0.push(0x66);
-  vgm1.push(0x66);
-  vgm2.push(0x66);
-
-  // now we can go back and fix up the header
-  var len = vgm0.length-4;
-  vgm0[4]=len&0xff;	// data length
-  vgm0[5]=(len>>8)&0xff;
-  vgm0[6]=(len>>16)&0xff;
-  vgm0[7]=(len>>24)&0xff;
-
-  vgm0[0x18] = vgm_samples&0xff;	// length in samples
-  vgm0[0x19] = (vgm_samples>>8)&0xff;
-  vgm0[0x1a] = (vgm_samples>>16)&0xff;
-  vgm0[0x1b] = (vgm_samples>>24)&0xff;
-
-  vgm1[4]=vgm0[4];
-  vgm1[5]=vgm0[5];
-  vgm1[6]=vgm0[6];
-  vgm1[7]=vgm0[7];
-  vgm1[0x18]=vgm0[0x18];
-  vgm1[0x19]=vgm0[0x19];
-  vgm1[0x1a]=vgm0[0x1a];
-  vgm1[0x1b]=vgm0[0x1b];
-
-  vgm2[4]=vgm0[4];
-  vgm2[5]=vgm0[5];
-  vgm2[6]=vgm0[6];
-  vgm2[7]=vgm0[7];
-  vgm2[0x18]=vgm0[0x18];
-  vgm2[0x19]=vgm0[0x19];
-  vgm2[0x1a]=vgm0[0x1a];
-  vgm2[0x1b]=vgm0[0x1b];
 
   return {
     "buffer": buffer,
     "clipped": num_clipped,
-    "vgm0": vgm0,
-    "vgm1": vgm1,
-    "vgm2": vgm2,
+    "afx": _encodeAFX(ayFrames),
   }
+}
+
+// Encode captured AY frames in the ayfx (.afx) single effect format, as
+// used by ayfxedit and the ayfxplay Z80 player.
+// Each frame is a flag byte:
+//   bit0..3  Volume
+//   bit4     Disable T (tone off)
+//   bit5     Change Tone (followed by 2 bytes tone period, LSB first)
+//   bit6     Change Noise (followed by 1 byte noise period)
+//   bit7     Disable N (noise off)
+// The effect ends with the marker bytes 0xD0, 0x20.
+function _encodeAFX(frames) {
+  var out = [];
+  var tone = -2;
+  var noise = -2;
+  // ayfxedit considers the last frame with non-zero volume to be the end of
+  // the effect, so trim any silent tail (but keep at least one frame)
+  var len = frames.length;
+  while (len > 1 && frames[len - 1].vol === 0)
+    --len;
+  frames = frames.slice(0, len);
+  for (var i = 0; i < frames.length; ++i) {
+    var f = frames[i];
+    var flags = f.vol & 0x0f;
+    if (f.noise >= 0) {
+      flags |= 0x10;  // noise effect: tone off
+      if (f.noise !== noise) {
+        flags |= 0x40;
+        noise = f.noise;
+      }
+    } else {
+      flags |= 0x80;  // tone effect: noise off
+      if (f.tone !== tone) {
+        flags |= 0x20;
+        tone = f.tone;
+      }
+    }
+    out.push(flags);
+    if (flags & 0x20) {
+      out.push(tone & 0xff);
+      out.push((tone >> 8) & 0x0f);
+    }
+    if (flags & 0x40) {
+      out.push(noise & 0x1f);
+    }
+  }
+  // end of effect marker
+  out.push(0xd0);
+  out.push(0x20);
+  return out;
 }
 
 SoundEffect.prototype.generate = function() {
@@ -959,9 +973,7 @@ SoundEffect.prototype.generate = function() {
   wave.buffer = normalized;
   wave.getAudio = _sfxr_getAudioFn(wave);
 
-  wave.loadvgm0(rendered.vgm0);
-  wave.loadvgm1(rendered.vgm1);
-  wave.loadvgm2(rendered.vgm2);
+  wave.loadafx(rendered.afx);
 
   return wave;
 }

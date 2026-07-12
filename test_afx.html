@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>ay3_jsfxr .afx output tests</title>
+<script src="riffwave.js"></script>
+<script src="sfxr.js"></script>
+<style>
+body { font-family: monospace; margin: 2em; }
+.fail { color: #c00; font-weight: bold; }
+.pass { color: #080; font-weight: bold; }
+.info { color: #444; }
+</style>
+</head>
+<body>
+<h2>ay3_jsfxr .afx output tests</h2>
+<div id="out"></div>
+<script>
+var failures = 0;
+function log(msg, cls) {
+  var d = document.createElement("div");
+  if (cls) d.className = cls;
+  d.textContent = msg;
+  document.getElementById("out").appendChild(d);
+}
+function check(cond, msg) {
+  if (!cond) { log("FAIL: " + msg, "fail"); failures++; }
+}
+
+// Decode an afx byte array into frames, following EffectDecode in
+// ayfxedit's UnitMain.cpp
+function decodeAFX(buf) {
+  var frames = [];
+  var tone = 0, noise = 0;
+  var pp = 0;
+  var terminated = false;
+  while (pp < buf.length) {
+    var it = buf[pp++];
+    if (it & 0x20) {
+      tone = (buf[pp] | (buf[pp + 1] << 8)) & 0xfff;
+      pp += 2;
+    }
+    if (it & 0x40) {
+      var nv = buf[pp++];
+      if (it === 0xd0 && nv >= 0x20) { terminated = true; break; }
+      noise = nv & 0x1f;
+    }
+    frames.push({
+      tone: tone, noise: noise,
+      vol: it & 0x0f,
+      t: !(it & 0x10), n: !(it & 0x80),
+      changedTone: !!(it & 0x20), changedNoise: !!(it & 0x40)
+    });
+  }
+  return { frames: frames, terminated: terminated, consumed: pp, total: buf.length };
+}
+
+var presets = ["pickupCoin", "laserShoot", "explosion", "powerUp", "hitHurt",
+               "jump", "blipSelect", "synth", "tone", "click", "random"];
+
+for (var run = 0; run < 5; ++run) {
+  for (var pi = 0; pi < presets.length; ++pi) {
+    var name = presets[pi];
+    var params = new Params()[name]();
+    var fr = (run % 2) ? 50 : 60;
+    params.frame_rate = fr;
+    var raw = new SoundEffect(params).getRawBuffer();
+    var afx = raw.afx;
+    var label = name + " (run " + run + ", " + fr + "Hz)";
+
+    var d = decodeAFX(afx);
+    check(d.terminated, label + ": missing 0xD0,0x20 terminator");
+    check(d.consumed === d.total, label + ": trailing bytes after terminator");
+    check(d.frames.length > 0, label + ": no frames");
+
+    var isNoise = (parseInt(params.wave_type) === NOISE);
+    for (var i = 0; i < d.frames.length; ++i) {
+      var f = d.frames[i];
+      check(f.vol >= 0 && f.vol <= 15, label + " frame " + i + ": bad vol " + f.vol);
+      if (isNoise) {
+        check(!f.t && f.n, label + " frame " + i + ": noise effect should be N only");
+        check(!f.changedTone, label + " frame " + i + ": tone written in noise effect");
+        if (f.changedNoise)
+          check(f.noise >= 1 && f.noise <= 31, label + " frame " + i + ": bad noise " + f.noise);
+      } else {
+        check(f.t && !f.n, label + " frame " + i + ": tone effect should be T only");
+        check(!f.changedNoise, label + " frame " + i + ": noise written in tone effect");
+        if (f.changedTone)
+          check(f.tone >= 1 && f.tone <= 4095, label + " frame " + i + ": bad tone " + f.tone);
+      }
+    }
+    // first frame must carry its period value
+    if (d.frames.length) {
+      var f0 = d.frames[0];
+      check(isNoise ? f0.changedNoise : f0.changedTone,
+            label + ": first frame does not set its period");
+    }
+
+    // frame count should not exceed the audio duration (buffer is 44100 Hz,
+    // 8-bit); it can be shorter because the silent tail is trimmed
+    var spf = (fr === 50) ? 882 : 735;
+    var expected = Math.floor((raw.buffer.length - 1) / spf) + 1;
+    check(d.frames.length <= expected + 1,
+          label + ": " + d.frames.length + " frames vs max ~" + expected +
+          " from " + raw.buffer.length + " samples");
+    // and the last kept frame should be audible (unless the whole effect
+    // was silent)
+    if (d.frames.length > 1)
+      check(d.frames[d.frames.length - 1].vol > 0,
+            label + ": silent tail was not trimmed");
+  }
+}
+
+// deterministic check: 440 Hz tone -> AY period ~ 1789772.5/(16*440) = 254
+var d2 = decodeAFX(new SoundEffect(new Params().tone()).getRawBuffer().afx);
+var tones = [];
+for (var i = 0; i < d2.frames.length; ++i)
+  if (d2.frames[i].changedTone) tones.push(d2.frames[i].tone);
+var vols = [];
+for (var i = 0; i < Math.min(8, d2.frames.length); ++i) vols.push(d2.frames[i].vol);
+log("tone preset (440 Hz): frames=" + d2.frames.length +
+    " tone periods=" + JSON.stringify(tones.slice(0, 5)) +
+    " vols(first 8)=" + JSON.stringify(vols), "info");
+check(Math.abs(tones[0] - 254) <= 2, "440 Hz tone period should be ~254, got " + tones[0]);
+check(d2.frames[0].vol === 15,
+      "full sustain tone should be volume 15, got " + d2.frames[0].vol);
+
+// a downward pitch slide should give increasing tone periods
+var lp = new Params();
+lp.wave_type = 0; lp.p_base_freq = 0.8; lp.p_freq_ramp = -0.4;
+lp.p_env_sustain = 0.3; lp.p_env_decay = 0.3;
+var d3 = decodeAFX(new SoundEffect(lp).getRawBuffer().afx);
+var t3 = [];
+for (var i = 0; i < d3.frames.length; ++i) t3.push(d3.frames[i].tone);
+check(t3[t3.length - 1] > t3[0], "downward slide should raise tone period: " +
+      t3[0] + " -> " + t3[t3.length - 1]);
+log("laser slide periods (every 5th frame): " +
+    JSON.stringify(t3.filter(function(v, i){return i % 5 === 0;})), "info");
+
+// very deep noise is impossible on the AY: it should clamp at the noise
+// floor (period 31) rather than going lower
+var np = new Params();
+np.wave_type = 3; np.p_base_freq = 0.05;
+np.p_env_sustain = 0.2; np.p_env_decay = 0.2;
+var d4 = decodeAFX(new SoundEffect(np).getRawBuffer().afx);
+check(d4.frames[0].noise === 31,
+      "deep noise should clamp to noise period 31, got " + d4.frames[0].noise);
+
+// noise volume is trimmed (env * 10/15 = 0.667 -> nearest AY level 13)
+check(d4.frames[0].vol === 13,
+      "full sustain noise should be trimmed to volume 13, got " + d4.frames[0].vol);
+
+// hexdump a short blip for eyeballing
+var blip = new SoundEffect(new Params().blipSelect()).getRawBuffer().afx;
+var hex = [];
+for (var i = 0; i < blip.length; ++i)
+  hex.push(("0" + blip[i].toString(16)).slice(-2));
+log("blip .afx (" + blip.length + " bytes): " + hex.join(" "), "info");
+
+// generate() plumbing (data URI via riffwave)
+var wave = new SoundEffect(new Params().pickupCoin()).generate();
+check(wave.afxdata.indexOf("data:application/octet-stream;base64,") === 0,
+      "generate() should produce afx data URI");
+
+log(failures ? failures + " FAILURE(S)" : "ALL CHECKS PASSED",
+    failures ? "fail" : "pass");
+</script>
+</body>
+</html>

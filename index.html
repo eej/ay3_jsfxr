@@ -2,8 +2,8 @@
 <html>
 <head>
    <meta name="fediverse:creator" content="@tursilion@furries.club" /> 
-<title>sn_jsfxr - 8 bit sound maker and online sfx generator</title>
-<meta name="description" content="A simple online 8 bit sound maker and sfx generator. You can also use it as a sound library in your JavaScript games.">
+<title>ay3_jsfxr - 8 bit sound maker and online sfx generator for the AY-3-8910 (MSX)</title>
+<meta name="description" content="A simple online 8 bit sound maker and sfx generator that creates ayfx (.afx) sound effects for the AY-3-8910 sound chip used in the MSX line of computers.">
 
 <meta charset="utf-8" >
 <meta name="viewport" content="width=device-width, initial-scale=0.95">
@@ -19,8 +19,10 @@
 var PARAMS;
 var SOUND;
 var SOUND_VOL = 0.25;
-var SAMPLE_RATE = 44100;
+// preview-only settings, fixed: they never affect the .afx output
+var SAMPLE_RATE = 22050;
 var SAMPLE_SIZE = 8;
+var FRAME_RATE = 50;
 
 Params.prototype.query = function () {
   var result = "";
@@ -37,16 +39,13 @@ function gen(fx) {
   PARAMS.sound_vol = SOUND_VOL;
   PARAMS.sample_rate = SAMPLE_RATE;
   PARAMS.sample_size = SAMPLE_SIZE;
+  PARAMS.frame_rate = FRAME_RATE;
   if (fx.indexOf("#") == 0) {
     PARAMS.fromB58(fx.slice(1));
-    $("#wav0").text("random0.vgm");
-    $("#wav1").text("random1.vgm");
-    $("#wav2").text("random2.vgm");
+    $("#afx").text("random.afx");
   } else {
     PARAMS[fx]();
-    $("#wav0").text(fx + "0.vgm");
-    $("#wav1").text(fx + "1.vgm");
-    $("#wav2").text(fx + "2.vgm");
+    $("#afx").text(fx + ".afx");
   }
   updateUi();
   play();
@@ -75,12 +74,8 @@ function play(noregen) {
     }
     
 //    $("#wav").attr("href", SOUND.dataURI)  ;
-    $("#wav0").attr("href", SOUND.vgmdata0)  ;
-    $("#wav1").attr("href", SOUND.vgmdata1)  ;
-    $("#wav2").attr("href", SOUND.vgmdata2)  ;
-    $("#wav0").attr("download", $("#wav0").text()) ;
-    $("#wav1").attr("download", $("#wav1").text()) ;
-    $("#wav2").attr("download", $("#wav2").text()) ;
+    $("#afx").attr("href", SOUND.afxdata)  ;
+    $("#afx").attr("download", $("#afx").text()) ;
     $("#sfx").attr("href", "sfx.wav?" + PARAMS.query());
     
     SOUND.getAudio().play();
@@ -117,6 +112,10 @@ function disenable() {
   $("#p_lpf_resonance").slider("option", "disabled", 1);
   $("#p_hpf_freq").slider("option", "disabled", 1);
   $("#p_hpf_ramp").slider("option", "disabled", 1);
+
+  // the flanger only exists in the preview synth, not on the AY
+  $("#p_pha_offset").slider("option", "disabled", 1);
+  $("#p_pha_ramp").slider("option", "disabled", 1);
 }
 
 function updateUi() {
@@ -124,11 +123,10 @@ function updateUi() {
     if (param == "wave_type") {
       $("#shape input:radio[value=" + value + "]").
         prop('checked', true).button("refresh");
-    } else if (param == "sample_rate") {
-      $("#hz input:radio[value=" + value + "]").
-        prop('checked', true).button("refresh");
-    } else if (param == "sample_size") {
-      $("#bits input:radio[value=" + value + "]").
+    } else if (param == "sample_rate" || param == "sample_size") {
+      // fixed preview-only settings, no UI
+    } else if (param == "frame_rate") {
+      $("#fps input:radio[value=" + value + "]").
         prop('checked', true).button("refresh");
     } else {
       var id = "#" + param;
@@ -142,19 +140,14 @@ function updateUi() {
 
 $(function() {
   $("#shape").buttonset();
-  $("#hz").buttonset();
-  $("#bits").buttonset();
+  $("#fps").buttonset();
   $("#shape input:radio").change(function (event) {
     PARAMS.wave_type = parseInt(event.target.value);
     disenable();
     play();
   });
-  $("#hz input:radio").change(function (event) {
-    SAMPLE_RATE = PARAMS.sample_rate = parseInt(event.target.value);
-    play();
-  });
-  $("#bits input:radio").change(function (event) {
-    SAMPLE_SIZE = PARAMS.sample_size = parseInt(event.target.value);
+  $("#fps input:radio").change(function (event) {
+    FRAME_RATE = PARAMS.frame_rate = parseInt(event.target.value);
     play();
   });
   $("button").button();
@@ -243,7 +236,7 @@ $(function() {
     p_env_punch:   function (v) { return v },
     p_env_decay:   function (v) { return v * v * 100000.0 },
     
-    p_base_freq:  function (v) { var h = 8 * 44100 * (v * v + 0.001) / 100; if (h < 110) return 110; else return h; },
+    p_base_freq:  function (v) { var h = 8 * 44100 * (v * v + 0.001) / 100; if (h < 27.4) return 27.4; else return h; },
     p_freq_limit: function (v) { return 8 * 44100 * (v * v + 0.001) / 100 },
     p_freq_ramp:  function (v) { return 1.0 - Math.pow(v, 3.0) * 0.01 },
     p_freq_dramp: function (v) { return -Math.pow(v, 3.0) * 0.000001 },
@@ -311,21 +304,11 @@ button, #soundexport, #sound_vol {
   width: 80px;
 }
 
-#hz label {
-  width: 40px;
+#fps label {
+  width: 50px;
 }
 
-#bits label {
-  width: 80px;
-}
-
-#wav0 {
-  font-weight: bold;
-}
-#wav1 {
-  font-weight: bold;
-}
-#wav2 {
+#afx {
   font-weight: bold;
 }
 
@@ -470,7 +453,7 @@ a {
 <body>
 
 <div>
-<h1>sn_jsfxr</h1>
+<h1>ay3_jsfxr</h1>
 </div>
 
 <div id="generators">
@@ -552,13 +535,10 @@ a {
 <div id="export">
   <h2>Sound</h2>
   <p id="soundexport">
-To save the sound, right- or control-click the following link, select 
-"Save As..." and choose a name with a ".vgm" extension. <br/>
-  <i>(0,1,2 is the square wave channel played on. Noises are the same on all three and always use voice 2+noise)</i> <br/>
+To save the sound, right- or control-click the following link, select
+"Save As..." and choose a name with a ".afx" extension. <br/>
   <br/>
-  <a id="wav0">sfx.vgm (0)</a> <br/>
-  <a id="wav1">sfx.vgm (1)</a> <br/>
-  <a id="wav2">sfx.vgm (2)</a> <br/>
+  <a id="afx">sfx.afx</a> <br/>
   <a id="share">permalink</a> <br/>
   <a id="permalink"></a>
   <!-- <a id="sfx">sfx.wav</a><br/> -->
@@ -577,27 +557,12 @@ To save the sound, right- or control-click the following link, select
   <div class="slider" id="sound_vol"></div> <br/>
   <br/>
 
-  Sample Rate (Hz) <br/>
-  <div id="hz">
-    <input type="radio" id="44100" value=44100 name="hz" checked="checked"/>
-      <label for="44100">44k</label>
-    <input type="radio" id="22050" value=22050 name="hz" />
-      <label for="22050">22k</label>
-    <input type="radio" id="11025" value=11025 name="hz" />
-      <label for="11025">11k</label>
-    <input type="radio" id="5512" value=5512 name="hz" />
-      <label for="5512">6k</label>
-  </div>
-
-  <br/>
-  <br/>
-  Sample size
-  <br/>
-  <div id="bits">
-    <input type="radio" id="16" value=16 name="bits"/>
-      <label for="16">16 bit</label>
-    <input type="radio" id="8" value=8 name="bits" checked="checked"/>
-      <label for="8">8 bit</label>
+  Player Frame Rate <br/>
+  <div id="fps">
+    <input type="radio" id="50fps" value=50 name="fps" checked="checked"/>
+      <label for="50fps">50 Hz</label>
+    <input type="radio" id="60fps" value=60 name="fps" />
+      <label for="60fps">60 Hz</label>
   </div>
 </form>
 
@@ -614,18 +579,20 @@ To save the sound, right- or control-click the following link, select
 </div>
 
 <div id="links">
-<h1>about sn_jsfxr</h1>
-<p>sn_jsfxr is an online 8 bit sound maker and sfx generator that creates VGMs for the SN76489. All you need to make retro sound effects with jsfxr is a web browser. It's a JavaScript port of the original <a href="http://www.drpetter.se/project_sfxr.html" id="original">sfxr</a> by DrPetter.</p>
+<h1>about ay3_jsfxr</h1>
+<p>ay3_jsfxr is an online 8 bit sound maker and sfx generator that creates ayfx (.afx) sound effects for the AY-3-8910, the sound chip used in the MSX line of computers, the NABU PC, and many others. The .afx files can be loaded and edited in Shiru's <a href="https://shiru.untergrund.net/software.shtml">AYFX Editor</a> (ayfxedit), which includes ayfxplay, a Z80 player.</p>
+<p>All you need to make retro sound effects with <a href="https://sfxr.me/">jsfxr</a> is a web browser. It's a JavaScript port of the original <a href="http://www.drpetter.se/project_sfxr.html" id="original">sfxr</a> by DrPetter.</p>
 <br/>
+(Port of <a href="https://github.com/tursilion/jsfxr" id="original0">sn_jsfxr</a> by Tursi)<br/>
 (Port of <a href="https://github.com/chr15m/jsfxr" id="original">jsfxr</a> by Chris McCormick)<br/>
 (Port of <a href="http://www.drpetter.se/project_sfxr.html" id="original2">sfxr</a> by DrPetter)<br/>
 <a id="uncopy" href="UNLICENSE">¢</a> 2011
 <a href="http://fredricksen.net/">Eric Fredricksen</a><br/>
 With <a href='https://github.com/chr15m/jsfxr'>contributions</a> from Chris McCormick<br/>
 And <a href="https://github.com/tursilion/jsfxr">hacks</a> from Tursi.<br />
+<a href="https://github.com/eej/ay3_jsfxr">AY-3-8910 support</a> from EEJ (with help from Claude).<br />
 <br/>
-<a href="https://github.com/tursilion/jsfxr" id="source">(This Source code)</a>
-<a href="https://github.com/chr15m/jsfxr" id="source">(Original jsfxr Source code)</a>
+<a href="https://github.com/eej/ay3_jsfxr" id="source">(This Source code)</a>
 <br/>
 </div>
 
