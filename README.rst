@@ -3,6 +3,8 @@ ay3_jsfxr
 
 Quick 'n' easy game sound effects generator for the AY-3-8910.
 
+Try it here: https://eej.github.io/ay3_jsfxr/
+
 Derived from jsfxr, a port of sfxr: http://www.drpetter.se/project_sfxr.html to HTML5.
 
 Based on sn_jsfxr (Tursi's SN76489/VGM fork of jsfxr), adapted to target
